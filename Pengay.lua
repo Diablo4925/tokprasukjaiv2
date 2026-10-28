@@ -5,6 +5,8 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
 
 local lp = Players.LocalPlayer
 local pgui = lp:WaitForChild("PlayerGui")
@@ -133,7 +135,10 @@ local Settings = {
     AntiAFK = true,
     LowRamClean = true,
     Disable3D = false,
-    SavedSpot = CFrame.new(-145.643, 14.271, -321.447, -0.941015899, 9.02651287e-09, 0.338362306, 1.01576303e-08, 1, 1.57221602e-09, -0.338362306, 4.91643926e-09, -0.941015899)
+    SavedSpot = CFrame.new(-145.643, 14.271, -321.447, -0.941015899, 9.02651287e-09, 0.338362306, 1.01576303e-08, 1, 1.57221602e-09, -0.338362306, 4.91643926e-09, -0.941015899),
+    AutoExecute = true,
+    AutoHopMod = true,
+    AutoRejoin = true
 }
 
 local CONFIG_NAME = "Sukjai_AutoFish_Config.json"
@@ -151,7 +156,10 @@ local function saveConfig()
                 AutoSell = Settings.AutoSell == true,
                 SellThreshold = tonumber(Settings.SellThreshold) or 450,
                 LowRamClean = Settings.LowRamClean == true,
-                Disable3D = Settings.Disable3D == true
+                Disable3D = Settings.Disable3D == true,
+                AutoExecute = Settings.AutoExecute == true,
+                AutoHopMod = Settings.AutoHopMod == true,
+                AutoRejoin = Settings.AutoRejoin == true
             }
             if Settings.SavedSpot then
                 local cf = Settings.SavedSpot
@@ -182,6 +190,9 @@ local function loadConfig()
                 if data.SellThreshold ~= nil then Settings.SellThreshold = tonumber(data.SellThreshold) or 450 end
                 if data.LowRamClean ~= nil then Settings.LowRamClean = data.LowRamClean == true end
                 if data.Disable3D ~= nil then Settings.Disable3D = data.Disable3D == true end
+                if data.AutoExecute ~= nil then Settings.AutoExecute = data.AutoExecute == true end
+                if data.AutoHopMod ~= nil then Settings.AutoHopMod = data.AutoHopMod == true end
+                if data.AutoRejoin ~= nil then Settings.AutoRejoin = data.AutoRejoin == true end
                 if type(data.SavedSpot) == "table" and #data.SavedSpot >= 12 then
                     Settings.SavedSpot = CFrame.new(unpack(data.SavedSpot))
                 end
@@ -718,6 +729,139 @@ registerCleanup(function()
     pcall(function() RunService:Set3dRenderingEnabled(true) end)
 end)
 
+local QUEUE_URL = "https://raw.githubusercontent.com/Diablo4925/tokprasukjaiv2/refs/heads/main/Pengay.lua"
+local function prepareAutoExecute()
+    if not Settings.AutoExecute then return end
+    local qot = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
+    if qot then
+        local loader = 'task.spawn(function() task.wait(3) pcall(function() loadstring(game:HttpGet("' .. QUEUE_URL .. '"))() end) end)'
+        pcall(function() qot(loader) end)
+    end
+end
+
+local isTeleporting = false
+local function serverHop()
+    if isTeleporting then return end
+    isTeleporting = true
+    prepareAutoExecute()
+    local placeId = game.PlaceId
+    local currentJob = game.JobId
+    local success = false
+    pcall(function()
+        local cursor = ""
+        for attempt = 1, 3 do
+            local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Desc&limit=100" .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
+            local raw = game:HttpGet(url)
+            local data = HttpService:JSONDecode(raw)
+            if data and data.data then
+                for _, srv in ipairs(data.data) do
+                    if type(srv) == "table" and srv.id and srv.id ~= currentJob and srv.playing and srv.maxPlayers and srv.playing < srv.maxPlayers then
+                        TeleportService:TeleportToPlaceInstance(placeId, srv.id, lp)
+                        success = true
+                        return
+                    end
+                end
+                if data.nextPageCursor then
+                    cursor = data.nextPageCursor
+                else
+                    break
+                end
+            end
+            task.wait(1)
+        end
+    end)
+    if not success then
+        pcall(function()
+            TeleportService:Teleport(placeId, lp)
+        end)
+    end
+end
+
+local function reconnectCurrent()
+    if isTeleporting then return end
+    isTeleporting = true
+    prepareAutoExecute()
+    local placeId = game.PlaceId
+    local currentJob = game.JobId
+    pcall(function()
+        if currentJob and currentJob ~= "" then
+            TeleportService:TeleportToPlaceInstance(placeId, currentJob, lp)
+        else
+            TeleportService:Teleport(placeId, lp)
+        end
+    end)
+    task.wait(4)
+    pcall(function()
+        TeleportService:Teleport(placeId, lp)
+    end)
+end
+
+local function isPlayerStaff(plr)
+    if not plr or plr == lp then return false end
+    local isStaff = false
+    pcall(function()
+        if plr:GetRankInGroup(34912223) > 1 then
+            isStaff = true
+        end
+    end)
+    if isStaff then return true end
+    local nameLower = plr.Name:lower()
+    local dispLower = plr.DisplayName:lower()
+    if nameLower:find("mod") or nameLower:find("admin") or nameLower:find("dev") or nameLower:find("owner") then
+        return true
+    end
+    if dispLower:find("mod") or dispLower:find("admin") or dispLower:find("dev") or dispLower:find("owner") then
+        return true
+    end
+    return false
+end
+
+local function checkAndHopStaff(plr)
+    if not Settings.AutoHopMod then return end
+    if isPlayerStaff(plr) then
+        if Fluent then
+            Fluent:Notify({
+                Title = "ตรวจพบทีมงาน / แอดมิน",
+                Content = "ตรวจพบ: " .. plr.Name .. " (" .. plr.DisplayName .. ") กำลังย้ายเซิร์ฟเวอร์หนี...",
+                Duration = 5
+            })
+        end
+        task.wait(0.5)
+        serverHop()
+    end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= lp then
+        task.spawn(function()
+            checkAndHopStaff(p)
+        end)
+    end
+end
+
+local playerAddedConn = Players.PlayerAdded:Connect(function(plr)
+    task.wait(0.5)
+    checkAndHopStaff(plr)
+end)
+registerCleanup(function() playerAddedConn:Disconnect() end)
+
+local errorConn = GuiService.ErrorMessageChanged:Connect(function()
+    if not Settings.AutoRejoin then return end
+    task.wait(0.5)
+    reconnectCurrent()
+end)
+registerCleanup(function() errorConn:Disconnect() end)
+
+task.spawn(function()
+    local targetPos = Vector3.new(-290, 12, -238)
+    local char = lp.Character or lp.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart", 10)
+    if hrp then
+        task.wait(1)
+        hrp.CFrame = CFrame.new(targetPos)
+    end
+end)
+
 local function setupAntiAFK()
     local cAFK = lp.Idled:Connect(function()
         if Settings.AntiAFK then
@@ -788,7 +932,8 @@ local Tabs = {
     Main = Window:AddTab({ Title = "ออโต้ตกปลา", Icon = "fish" }),
     Sell = Window:AddTab({ Title = "ขายปลา & คลัง", Icon = "shopping-bag" }),
     Ram = Window:AddTab({ Title = "ประหยัด RAM", Icon = "cpu" }),
-    Spot = Window:AddTab({ Title = "จุดตกปลา", Icon = "map-pin" })
+    Spot = Window:AddTab({ Title = "จุดตกปลา", Icon = "map-pin" }),
+    Server = Window:AddTab({ Title = "เซิร์ฟเวอร์ & ออโต้รัน", Icon = "server" })
 }
 
 Tabs.Main:AddParagraph({
@@ -969,6 +1114,65 @@ Tabs.Spot:AddButton({
             Fluent:Notify({ Title = "วาร์ปสำเร็จ", Content = "วาร์ปไปยังตำแหน่งที่บันทึกแล้ว", Duration = 2 })
         else
             Fluent:Notify({ Title = "ไม่พบจุดที่เซฟ", Content = "กรุณากดบันทึกจุดตกปลาก่อน", Duration = 3 })
+        end
+    end
+})
+
+Tabs.Server:AddParagraph({
+    Title = "ระบบป้องกันและรันสคริปต์อัตโนมัติ",
+    Content = "สคริปต์จะบันทึกลงคิวเพื่อรันตัวเองอัตโนมัติเมื่อย้ายเซิร์ฟหรือหลุดเกม พร้อมวาร์ปไปพิกัดฟาร์มทันที"
+})
+
+Tabs.Server:AddToggle("AutoExecuteToggle", {
+    Title = "ออโต้รันสคริปต์หลังย้ายเซิร์ฟเวอร์ (Auto Execute)",
+    Default = Settings.AutoExecute,
+    Callback = function(val)
+        Settings.AutoExecute = val
+        saveConfig()
+    end
+})
+
+Tabs.Server:AddToggle("AutoHopModToggle", {
+    Title = "ย้ายเซิร์ฟเวอร์หนีแอดมิน (Auto Hop Mod/Admin)",
+    Default = Settings.AutoHopMod,
+    Callback = function(val)
+        Settings.AutoHopMod = val
+        saveConfig()
+    end
+})
+
+Tabs.Server:AddToggle("AutoRejoinToggle", {
+    Title = "เข้าเกมใหม่อัตโนมัติเมื่อหลุด (Auto Rejoin Error 277/268)",
+    Default = Settings.AutoRejoin,
+    Callback = function(val)
+        Settings.AutoRejoin = val
+        saveConfig()
+    end
+})
+
+Tabs.Server:AddButton({
+    Title = "ย้ายเซิร์ฟเวอร์ทันที (Server Hop Now)",
+    Description = "ค้นหาและย้ายไปยังเซิร์ฟเวอร์สาธารณะอื่นทันที",
+    Callback = function()
+        serverHop()
+    end
+})
+
+Tabs.Server:AddButton({
+    Title = "เข้าห้องเดิมใหม่ทันที (Rejoin Current Server)",
+    Description = "รีเซ็ตเชื่อมต่อเข้าเซิร์ฟเวอร์เดิมใหม่ทันที",
+    Callback = function()
+        reconnectCurrent()
+    end
+})
+
+Tabs.Server:AddButton({
+    Title = "วาร์ปไปพิกัดฟาร์มหลัก (-290, 12, -238)",
+    Description = "วาร์ปตัวละครไปยังพิกัดตกปลาหลักทันที",
+    Callback = function()
+        if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
+            lp.Character.HumanoidRootPart.CFrame = CFrame.new(-290, 12, -238)
+            Fluent:Notify({ Title = "วาร์ปสำเร็จ", Content = "วาร์ปมายังพิกัด -290, 12, -238 แล้ว", Duration = 2 })
         end
     end
 })
